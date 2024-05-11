@@ -156,14 +156,14 @@ class BertModel(BertPreTrainedModel):
     # Get word embedding from self.word_embedding into input_embeds.
     inputs_embeds = None
     ### TODO
-    raise NotImplementedError
+    inputs_embeds = self.word_embedding[input_ids]
 
 
     # Use pos_ids to get position embedding from self.pos_embedding into pos_embeds.
     pos_ids = self.position_ids[:, :seq_length]
     pos_embeds = None
     ### TODO
-    raise NotImplementedError
+    pos_embeds = self.pos_embedding[pos_ids]
 
 
     # Get token type ids. Since we are not considering token type, this embedding is
@@ -173,7 +173,8 @@ class BertModel(BertPreTrainedModel):
 
     # Add three embeddings together; then apply embed_layer_norm and dropout and return.
     ### TODO
-    raise NotImplementedError
+    embeddings = inputs_embeds + pos_embeds + tk_type_embeds
+    return self.embed_dropout(self.embed_layer_norm(embeddings))
 
 
   def encode(self, hidden_states, attention_mask):
