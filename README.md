@@ -3,6 +3,7 @@
 This is the default final project for the Stanford CS 224N class. Please refer to the project handout on the course website for detailed instructions and an overview of the codebase.
 
 Abishek Satish Christopher Sun
+TEST
 
 This project comprises two parts. In the first part, you will implement some important components of the BERT model to better understand its architecture. 
 In the second part, you will use the embeddings produced by your BERT model on three downstream tasks: sentiment classification, paraphrase detection, and semantic similarity. You will implement extensions to improve your model's performance on the three downstream tasks.
