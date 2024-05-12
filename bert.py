@@ -43,6 +43,32 @@ class BertSelfAttention(nn.Module):
     # Note that the attention mask distinguishes between non-padding tokens (with a value of 0)
     # and padding tokens (with a value of a large negative number).
 
+    #key --> shape: (bs, num_attention_heads, seq_len, attention_head_size) (we transpose this in the eq)
+    #query --> shape: (bs, num_attention_heads, seq_len, attention_head_size)
+    #K^T --> shape: (bs, num_attention_heads, seq_len, all_head_size)
+    
+    # S --> shape: (bs, num_attention_heads, seq_len, seq_len)
+    
+    K_T = torch.transpose(key, 2, 3) 
+    S = torch.matmul(query, K_T)
+    S = S * attention_mask #mask out answers, masked answers will be -infinity, because softmax(-infinity) = 0
+    
+    bs = key.shape[0]
+    seq_len = key.shape[2]
+    attention_head_size = key.shape[3]
+    
+    m = torch.softmax((S/torch.sqrt(attention_head_size)), dim = -1) #softmax along column 
+    weighted_values = torch.matmul(m, value)  #shape : (bs, num_attention_heads, seq_len, attention_head_size)
+    
+    weighted_values = torch.transpose(weighted_values, 1, 2)  #--> (bs, seq_len, num_attention_heads, attention_head_size)
+    weighted_values = weighted_values.view(bs, seq_len, -1) #--> (bs, seq_len, num_attention_heads * attention_head_size)
+    
+    return weighted_values
+    
+    print("key", key.shape)
+    print("query", query.shape)
+    print("val", value.shape)
+    
     # Make sure to:
     # - Normalize the scores with softmax.
     # - Multiply the attention scores with the value to get back weighted values.
