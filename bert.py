@@ -45,7 +45,8 @@ class BertSelfAttention(nn.Module):
 
     #key --> shape: (bs, num_attention_heads, seq_len, attention_head_size) (we transpose this in the eq)
     #query --> shape: (bs, num_attention_heads, seq_len, attention_head_size)
-    #K^T --> shape: (bs, num_attention_heads, seq_len, all_head_size)
+    #value --> shape: (bs, num_attention_heads, seq_len, attention_head_size)
+    #K^T --> shape: (bs, num_attention_heads, attention_head_size, seq_len)
     
     # S --> shape: (bs, num_attention_heads, seq_len, seq_len)
     
@@ -53,15 +54,13 @@ class BertSelfAttention(nn.Module):
     S = torch.matmul(query, K_T)
     S = S * attention_mask #mask out answers, masked answers will be -infinity, because softmax(-infinity) = 0
     
-    bs = key.shape[0]
-    seq_len = key.shape[2]
-    attention_head_size = key.shape[3]
+    bs, num_attention_heads, seq_len, attention_head_size = key.shape
     
-    m = torch.softmax((S/torch.sqrt(attention_head_size)), dim = -1) #softmax along column 
+    m = torch.softmax((S/torch.sqrt(torch.tensor(attention_head_size))), dim = -1) #softmax along column 
     weighted_values = torch.matmul(m, value)  #shape : (bs, num_attention_heads, seq_len, attention_head_size)
     
     weighted_values = torch.transpose(weighted_values, 1, 2)  #--> (bs, seq_len, num_attention_heads, attention_head_size)
-    weighted_values = weighted_values.view(bs, seq_len, -1) #--> (bs, seq_len, num_attention_heads * attention_head_size)
+    weighted_values = weighted_values.reshape(bs, seq_len, num_attention_heads * attention_head_size) #--> (bs, seq_len, num_attention_heads * attention_head_size)
     
     return weighted_values
     
