@@ -50,23 +50,20 @@ class BertSelfAttention(nn.Module):
     
     # S --> shape: (bs, num_attention_heads, seq_len, seq_len)
     
-    K_T = torch.transpose(key, 2, 3) 
-    S = torch.matmul(query, K_T)
-    S = S * attention_mask #mask out answers, masked answers will be -infinity, because softmax(-infinity) = 0
-    
     bs, num_attention_heads, seq_len, attention_head_size = key.shape
     
-    m = torch.softmax((S/torch.sqrt(torch.tensor(attention_head_size))), dim = -1) #softmax along column 
+    K_T = torch.transpose(key, 2, 3) 
+    S = torch.matmul(query, K_T)
+    S = S + attention_mask # mask out answers, masked answers will be -infinity, because softmax(-infinity) = 0
+    
+    m = torch.softmax((S/torch.sqrt(torch.tensor(attention_head_size))), dim = -1) # softmax along column 
+    
     weighted_values = torch.matmul(m, value)  #shape : (bs, num_attention_heads, seq_len, attention_head_size)
     
     weighted_values = torch.transpose(weighted_values, 1, 2)  #--> (bs, seq_len, num_attention_heads, attention_head_size)
     weighted_values = weighted_values.reshape(bs, seq_len, num_attention_heads * attention_head_size) #--> (bs, seq_len, num_attention_heads * attention_head_size)
-    
+
     return weighted_values
-    
-    print("key", key.shape)
-    print("query", query.shape)
-    print("val", value.shape)
     
     # Make sure to:
     # - Normalize the scores with softmax.
