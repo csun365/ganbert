@@ -38,7 +38,6 @@ class BertSentimentClassifier(torch.nn.Module):
         super(BertSentimentClassifier, self).__init__()
         self.num_labels = config.num_labels
         self.bert = BertModel.from_pretrained('bert-base-uncased')
-
         # Pretrain mode does not require updating BERT paramters.
         assert config.fine_tune_mode in ["last-linear-layer", "full-model"]
         for param in self.bert.parameters():
@@ -49,7 +48,8 @@ class BertSentimentClassifier(torch.nn.Module):
 
         # Create any instance variables you need to classify the sentiment of BERT embeddings.
         ### TODO
-        raise NotImplementedError
+        self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
+        self.dense = torch.nn.Linear(config.hidden_size, self.num_labels)
 
 
     def forward(self, input_ids, attention_mask):
@@ -58,7 +58,9 @@ class BertSentimentClassifier(torch.nn.Module):
         # HINT: You should consider what is an appropriate return value given that
         # the training loop currently uses F.cross_entropy as the loss function.
         ### TODO
-        raise NotImplementedError
+        embedding = self.bert(input_ids, attention_mask)
+        h_cls = embedding["pooler_output"]
+        return self.dense(self.dropout(h_cls))
 
 
 
