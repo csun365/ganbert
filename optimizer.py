@@ -42,9 +42,29 @@ class AdamW(Optimizer):
                 # State should be stored in this dictionary.
                 state = self.state[p]
 
+                if len(state) == 0: #for every gradient in group params
+                    state["step"] = 0
+                    state["m"] = torch.zeros(grad.size(), dtype=torch.float32)
+                    state["v"] = torch.zeros(grad.size(), dtype=torch.float32)
+                    
+                state["step"] += 1
+                t = state["step"]
+                
                 # Access hyperparameters from the `group` dictionary.
                 alpha = group["lr"]
-
+                beta1, beta2 = group["betas"]
+                eps = group["eps"]
+                weight_decay = group["weight_decay"]
+                
+                state["m"] = beta1 * state["m"] + (1 - beta1) * grad
+                state["v"] = beta2 * state["v"] + (1 - beta2) * torch.mul(grad, grad)
+                
+                a_t = alpha * ((1 - (beta2 ** t)) ** 1/2) / (1 - (beta1 ** t))
+                update = (a_t * state["m"])/(torch.sqrt(state["v"]) + eps) 
+                
+                p.data -= update + (alpha * p.data * weight_decay)
+                
+                
                 # Complete the implementation of AdamW here, reading and saving
                 # your state in the `state` dictionary above.
                 # The hyperparameters can be read from the `group` dictionary
@@ -52,6 +72,7 @@ class AdamW(Optimizer):
                 #
                 # To complete this implementation:
                 # 1. Update the first and second moments of the gradients.
+                
                 # 2. Apply bias correction
                 #    (using the "efficient version" given in https://arxiv.org/abs/1412.6980;
                 #     also given in the pseudo-code in the project description).
@@ -60,7 +81,7 @@ class AdamW(Optimizer):
                 # Refer to the default project handout for more details.
 
                 ### TODO
-                raise NotImplementedError
+                return p.data
 
 
         return loss
