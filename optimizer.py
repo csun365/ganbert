@@ -59,7 +59,7 @@ class AdamW(Optimizer):
                 state["m"] = beta1 * state["m"] + (1 - beta1) * grad
                 state["v"] = beta2 * state["v"] + (1 - beta2) * torch.mul(grad, grad)
                 
-                a_t = alpha * ((1 - (beta2 ** t)) ** 1/2) / (1 - (beta1 ** t))
+                a_t = alpha * ((1 - (beta2 ** t)) ** 0.5) / (1 - (beta1 ** t))
                 update = (a_t * state["m"])/(torch.sqrt(state["v"]) + eps) 
                 
                 p.data -= update + (alpha * p.data * weight_decay)
@@ -81,7 +81,6 @@ class AdamW(Optimizer):
                 # Refer to the default project handout for more details.
 
                 ### TODO
-                return p.data
 
 
         return loss
