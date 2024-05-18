@@ -41,11 +41,14 @@ class AdamW(Optimizer):
 
                 # State should be stored in this dictionary.
                 state = self.state[p]
+                
 
                 if len(state) == 0: #for every gradient in group params
                     state["step"] = 0
-                    state["m"] = torch.zeros(grad.size(), dtype=torch.float32)
-                    state["v"] = torch.zeros(grad.size(), dtype=torch.float32)
+                    print("p's device", p.device)
+                    state["m"] = torch.zeros(grad.size(), dtype=torch.float32).to(p.device)
+                    state["v"] = torch.zeros(grad.size(), dtype=torch.float32).to(p.device)
+                    
                     
                 state["step"] += 1
                 t = state["step"]
