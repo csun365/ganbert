@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from base_bert import BertPreTrainedModel
 from bert import BertModel
+from classifier import *
 
 from utils import *
 from torch.utils.data import Dataset, DataLoader
@@ -112,13 +113,12 @@ def train():
     optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
 
     # Lists to keep track of progress
-    img_list = []
     G_losses = []
     D_losses = []
     iters = 0
 
     for epoch in range(num_epochs):
-        for i, data in enumerate(dataloader, 0):
+        for i, data in enumerate(train_dataloader, 0):
 
             ############################
             # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
@@ -198,4 +198,4 @@ def train():
 
 if __name__ == "main":
     print("Starting Training Loop...")
-    train()
+    # train()
