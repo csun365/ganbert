@@ -106,7 +106,8 @@ def train():
     # ---------------------------------------------------------------------------------------
     netG = ConditionalGenerator(768, num_labels, 128, 0.3, 1).to(device)
     netD = DiscriminatorBert(768, 0.3, num_labels, 1).to(device)
-    criterion = nn.BCELoss()
+    criterion_BCE = nn.BCELoss()
+    criterion_CE = nn.CrossEntropyLoss()
 
     # Setup Adam optimizers for both G and D
     optimizerD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -116,6 +117,11 @@ def train():
     G_losses = []
     D_losses = []
     iters = 0
+    
+    num_epochs = args.num_epochs
+    real_label = 1
+    fake_label = 0
+    nz = 768
 
     for epoch in range(num_epochs):
         for i, data in enumerate(train_dataloader, 0):
@@ -132,41 +138,51 @@ def train():
             label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
             
             # Concatenate real images and real labels
-            real_labels_one_hot = torch.nn.functional.one_hot(real_labels, num_classes).float().to(device)
-            real_combined = torch.cat((real_cpu, real_labels_one_hot), dim=1)
+            # real_labels_one_hot = torch.nn.functional.one_hot(real_labels, num_classes).float().to(device)
+            # real_combined = torch.cat((real_cpu, real_labels_one_hot), dim=1)
+            _, logit_real, prob_real = netD(real_cpu, data[2].to(device))  # assuming data[2] is attention_mask
             
-            # Forward pass real batch through D
-            output = netD(real_combined).view(-1)
-            # Calculate loss on all-real batch
-            errD_real = criterion(output, label)
-            # Calculate gradients for D in backward pass
-            errD_real.backward()
-            D_x = output.mean().item()
+            # Adversarial loss for real data
+            errD_real = criterion_BCE(prob_real[:, -1], label)
+            
+            # Classification loss for real data
+            errD_class = criterion_CE(logit_real[:, :-1], real_labels)
+            
+            D_x = prob_real[:, -1].mean().item()
+            
+            # # Forward pass real batch through D
+            # output = netD(real_combined).view(-1)
+            # # Calculate loss on all-real batch
+            # errD_real = criterion(output, label)
+            # # Calculate gradients for D in backward pass
+            # errD_real.backward()
+            # D_x = output.mean().item()
 
             ## Train with all-fake batch
             # Generate batch of latent vectors
             noise = torch.randn(b_size, nz, device=device)
             # Generate batch of class labels
-            fake_labels = torch.randint(0, num_classes, (b_size,), device=device)
-            fake_labels_one_hot = torch.nn.functional.one_hot(fake_labels, num_classes).float().to(device)
+            fake_labels = torch.randint(0, num_labels, (b_size,), device=device)
+            # # Generate fake image batch with G
+            fake = netG(noise, F.one_hot(fake_labels, num_classes=num_labels).float().to(device))
+
+            label.fill_(fake_label) # Fake labels are 0 for real/fake classification
             
-            # Generate fake image batch with G
-            fake = netG(noise, fake_labels_one_hot)
-            label.fill_(fake_label)
-            
-            # Concatenate fake images and fake labels
-            fake_combined = torch.cat((fake, fake_labels_one_hot), dim=1)
-            
+            # Forward pass of fake batch through D
             # Classify all fake batch with D
-            output = netD(fake_combined.detach()).view(-1)
+            _, logit_fake, prob_fake = netD(fake, data[2].to(device))  # assuming same attention_mask for simplicity
+            
+            errD_fake = criterion_BCE(prob_fake[:, -1], label)
+            D_G_z1 = prob_fake[:, -1].mean().item()
+
+            
             # Calculate D's loss on the all-fake batch
-            errD_fake = criterion(output, label)
+            errD_fake = criterion_BCE(prob_fake[:, -1], label)
             # Calculate the gradients for this batch, accumulated (summed) with previous gradients
-            errD_fake.backward()
-            D_G_z1 = output.mean().item()
-            # Compute error of D as sum over the fake and the real batches
-            errD = errD_real + errD_fake
-            # Update D
+            
+            # Total discriminator loss
+            errD = errD_real + errD_fake + errD_class
+            errD.backward()
             optimizerD.step()
 
             ############################
@@ -176,19 +192,26 @@ def train():
             label.fill_(real_label)  # fake labels are real for generator cost
             
             # Since we just updated D, perform another forward pass of all-fake batch through D
-            output = netD(fake_combined).view(-1)
-            # Calculate G's loss based on this output
-            errG = criterion(output, label)
-            # Calculate gradients for G
+            _, logit_fake, prob_fake = netD(fake, data[2].to(device))
+            
+            # Adversarial loss for generator
+            errG_adv = criterion_BCE(prob_fake[:, -1], label)
+            # Classification loss for generated data
+            errG_class = criterion_CE(logit_fake[:, :-1], fake_labels)
+            
+            # Total Generator Loss
+            errG = errG_adv + errG_class
             errG.backward()
-            D_G_z2 = output.mean().item()
-            # Update G
             optimizerG.step()
+            
+            # Compute D(G(z)) which gives us generator update
+            D_G_z2 = prob_fake[:, -1].mean().item()
+
 
             # Output training stats
             if i % 50 == 0:
                 print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
-                    % (epoch, num_epochs, i, len(dataloader),
+                    % (epoch, num_epochs, i, len(train_dataloader),
                         errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
 
             # Save Losses for plotting later
