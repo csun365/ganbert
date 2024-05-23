@@ -73,7 +73,7 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = True
         # You will want to add layers here to perform the downstream tasks.
         ### TODO
-        # self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
+        self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
         self.dense_sentiment = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
         self.dense_paraphrase = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
         self.dense_similarity = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
@@ -88,7 +88,7 @@ class MultitaskBERT(nn.Module):
         ### TODO
         embedding = self.bert(input_ids, attention_mask)
         h_cls = embedding["pooler_output"]
-        return h_cls
+        return self.dropout(h_cls)
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -152,7 +152,8 @@ def train_multitask(args):
     look at test_multitask below to see how you can use the custom torch `Dataset`s
     in datasets.py to load in examples from the Quora and SemEval datasets.
     '''
-    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+    # device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+    device = torch.device("mps")
     # Create the data and its corresponding datasets and dataloader.
     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
@@ -219,7 +220,8 @@ def train_multitask(args):
 def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
     with torch.no_grad():
-        device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+        # device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+        device = torch.device("mps")
         saved = torch.load(args.filepath)
         config = saved['model_config']
 
