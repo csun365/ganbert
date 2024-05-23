@@ -73,7 +73,10 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = True
         # You will want to add layers here to perform the downstream tasks.
         ### TODO
-        raise NotImplementedError
+        # self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
+        self.dense_sentiment = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
+        self.dense_paraphrase = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
+        self.dense_similarity = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
 
 
     def forward(self, input_ids, attention_mask):
@@ -83,7 +86,9 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         ### TODO
-        raise NotImplementedError
+        embedding = self.bert(input_ids, attention_mask)
+        h_cls = embedding["pooler_output"]
+        return h_cls
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -93,7 +98,7 @@ class MultitaskBERT(nn.Module):
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        raise NotImplementedError
+        return self.dense_sentiment(self.forward(input_ids, attention_mask))
 
 
     def predict_paraphrase(self,
@@ -104,7 +109,9 @@ class MultitaskBERT(nn.Module):
         during evaluation.
         '''
         ### TODO
-        raise NotImplementedError
+        embed_1 = self.forward(input_ids_1, attention_mask_1)
+        embed_2 = self.forward(input_ids_2, attention_mask_2)
+        return self.dense_paraphrase(torch.cat((embed_1, embed_2), dim=-1)).squeeze(-1)
 
 
     def predict_similarity(self,
@@ -114,7 +121,10 @@ class MultitaskBERT(nn.Module):
         Note that your output should be unnormalized (a logit).
         '''
         ### TODO
-        raise NotImplementedError
+        embed_1 = self.forward(input_ids_1, attention_mask_1)
+        embed_2 = self.forward(input_ids_2, attention_mask_2)
+        return self.dense_similarity(torch.cat((embed_1, embed_2), dim=-1)).squeeze(-1)
+
 
 
 
