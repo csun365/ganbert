@@ -48,8 +48,8 @@ class BertSentimentClassifier(torch.nn.Module):
 
         # Create any instance variables you need to classify the sentiment of BERT embeddings.
         ### TODO
-        self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
-        self.dense = torch.nn.Linear(config.hidden_size, self.num_labels)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.dense = nn.Linear(config.hidden_size, self.num_labels)
 
 
     def forward(self, input_ids, attention_mask):

@@ -73,11 +73,19 @@ class MultitaskBERT(nn.Module):
                 param.requires_grad = True
         # You will want to add layers here to perform the downstream tasks.
         ### TODO
-        self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
-        self.dense_sentiment = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)
-        self.dense_paraphrase = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
-        self.dense_similarity = torch.nn.Linear(2 * BERT_HIDDEN_SIZE, 1)
-
+        self.dense_1 = nn.Linear(BERT_HIDDEN_SIZE, 256)
+        self.dense_2 = nn.Linear(256, 128)
+        self.dropout_1 = nn.Dropout(config.hidden_dropout_prob)
+        self.dropout_2 = nn.Dropout(config.hidden_dropout_prob)
+        # self.dense_sst = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        # self.dense_para = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        # self.dense_sts = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        self.output_sst = nn.Linear(128, N_SENTIMENT_CLASSES)
+        self.para_1 = nn.Linear(2 * 128, 64)
+        self.para_2 = nn.Linear(64, 1)
+        self.sts_1 = nn.Linear(2 * 128, 64)
+        self.sts_2 = nn.Linear(64, 1)
+        
 
     def forward(self, input_ids, attention_mask):
         'Takes a batch of sentences and produces embeddings for them.'
@@ -88,7 +96,8 @@ class MultitaskBERT(nn.Module):
         ### TODO
         embedding = self.bert(input_ids, attention_mask)
         h_cls = embedding["pooler_output"]
-        return self.dropout(h_cls)
+        output = self.dropout_1(F.relu(self.dense_1(h_cls)))
+        return self.dropout_2(F.relu(self.dense_2(output)))
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -98,7 +107,12 @@ class MultitaskBERT(nn.Module):
         Thus, your output should contain 5 logits for each sentence.
         '''
         ### TODO
-        return self.dense_sentiment(self.forward(input_ids, attention_mask))
+        # h_cls, shared_embed = self.forward(input_ids, attention_mask)
+        # sst_embed = self.dense_sst(h_cls)
+        # output = self.output_sst(torch.cat((shared_embed, sst_embed), dim=-1))
+        # return F.relu(output)
+        embed = self.forward(input_ids, attention_mask)
+        return self.output_sst(embed)
 
 
     def predict_paraphrase(self,
@@ -109,10 +123,16 @@ class MultitaskBERT(nn.Module):
         during evaluation.
         '''
         ### TODO
+        # h_cls_1, shared_embed_1 = self.forward(input_ids_1, attention_mask_1)
+        # h_cls_2, shared_embed_2 = self.forward(input_ids_2, attention_mask_2)
+        # para_embed_1 = self.dense_para(h_cls_1)
+        # para_embed_2 = self.dense_para(h_cls_2)
+        # output = self.output_para(torch.cat((shared_embed_1, para_embed_1, shared_embed_2, para_embed_2), dim=-1))
+        # return output.squeeze(-1)
         embed_1 = self.forward(input_ids_1, attention_mask_1)
         embed_2 = self.forward(input_ids_2, attention_mask_2)
-        return self.dense_paraphrase(torch.cat((embed_1, embed_2), dim=-1)).squeeze(-1)
-
+        output = self.para_1(torch.cat((embed_1, embed_2), dim=-1))
+        return self.para_2(F.relu(output)).squeeze(-1)
 
     def predict_similarity(self,
                            input_ids_1, attention_mask_1,
@@ -121,12 +141,16 @@ class MultitaskBERT(nn.Module):
         Note that your output should be unnormalized (a logit).
         '''
         ### TODO
+        # h_cls_1, shared_embed_1 = self.forward(input_ids_1, attention_mask_1)
+        # h_cls_2, shared_embed_2 = self.forward(input_ids_2, attention_mask_2)
+        # sts_embed_1 = self.dense_para(h_cls_1)
+        # sts_embed_2 = self.dense_para(h_cls_2)
+        # output = self.output_para(torch.cat((shared_embed_1, sts_embed_1, shared_embed_2, sts_embed_2), dim=-1))
+        # return output.squeeze(-1)
         embed_1 = self.forward(input_ids_1, attention_mask_1)
         embed_2 = self.forward(input_ids_2, attention_mask_2)
-        return self.dense_similarity(torch.cat((embed_1, embed_2), dim=-1)).squeeze(-1)
-
-
-
+        output = self.sts_1(torch.cat((embed_1, embed_2), dim=-1))
+        return self.sts_2(F.relu(output)).squeeze(-1)
 
 
 def save_model(model, optimizer, args, config, filepath):
@@ -158,14 +182,14 @@ def train_multitask(args):
     sst_train_data, num_labels, para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels, para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
 
-    sst_train_data = SentenceClassificationDataset(sst_train_data, args)
-    sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
+    sst_train_data = SentenceClassificationDataset(sst_train_data[:1000], args)
+    sst_dev_data = SentenceClassificationDataset(sst_dev_data[:1000], args)
     
-    para_train_data = SentencePairDataset(para_train_data, args)
-    para_dev_data = SentencePairDataset(para_dev_data, args)
+    para_train_data = SentencePairDataset(para_train_data[:1000], args)
+    para_dev_data = SentencePairDataset(para_dev_data[:1000], args)
     
-    sts_train_data = SentencePairDataset(sts_train_data, args)
-    sts_dev_data = SentencePairDataset(sts_dev_data, args)
+    sts_train_data = SentencePairDataset(sts_train_data[:1000], args)
+    sts_dev_data = SentencePairDataset(sts_dev_data[:1000], args)
     
 
     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
@@ -205,8 +229,7 @@ def train_multitask(args):
         train_loss = 0
         num_batches = 0
         for sst_batch, para_batch, sts_batch in tqdm(zip(sst_train_dataloader, para_train_dataloader, sts_train_dataloader), desc=f'train-{epoch}', disable=TQDM_DISABLE):
-            sst_b_ids, sst_b_mask, sst_b_labels = (sst_batch['token_ids'],
-                                                    sst_batch['attention_mask'], sst_batch['labels'])
+            sst_b_ids, sst_b_mask, sst_b_labels = (sst_batch['token_ids'], sst_batch['attention_mask'], sst_batch['labels'])
             para_b_id1, para_b_mask1, para_b_id2, para_b_mask2, para_b_labels = (para_batch['token_ids_1'], para_batch['attention_mask_1'],
                                                                                 para_batch['token_ids_2'], para_batch['attention_mask_2'],
                                                                                 para_batch['labels'])
@@ -238,8 +261,6 @@ def train_multitask(args):
             sst_loss = F.cross_entropy(sst_logits, sst_b_labels.view(-1), reduction='sum') / args.batch_size
             para_loss = F.binary_cross_entropy(para_logits, para_b_labels.float(), reduction='sum') / args.batch_size
             sts_loss = F.mse_loss(sts_logits, sts_b_labels.float(), reduction='sum') / args.batch_size
-            
-            
             
             loss = sst_loss + para_loss + sts_loss
 
@@ -283,17 +304,17 @@ def test_multitask(args):
         sst_test_data = SentenceClassificationTestDataset(sst_test_data, args)
         sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
 
-        sst_test_dataloader = DataLoader(sst_test_data, shuffle=True, batch_size=args.batch_size,
+        sst_test_dataloader = DataLoader(sst_test_data[:1000], shuffle=True, batch_size=args.batch_size,
                                          collate_fn=sst_test_data.collate_fn)
-        sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
+        sst_dev_dataloader = DataLoader(sst_dev_data[:1000], shuffle=False, batch_size=args.batch_size,
                                         collate_fn=sst_dev_data.collate_fn)
 
-        para_test_data = SentencePairTestDataset(para_test_data, args)
-        para_dev_data = SentencePairDataset(para_dev_data, args)
+        para_test_data = SentencePairTestDataset(para_test_data[:1000], args)
+        para_dev_data = SentencePairDataset(para_dev_data[:1000], args)
 
-        para_test_dataloader = DataLoader(para_test_data, shuffle=True, batch_size=args.batch_size,
+        para_test_dataloader = DataLoader(para_test_data[:1000], shuffle=True, batch_size=args.batch_size,
                                           collate_fn=para_test_data.collate_fn)
-        para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+        para_dev_dataloader = DataLoader(para_dev_data[:1000], shuffle=False, batch_size=args.batch_size,
                                          collate_fn=para_dev_data.collate_fn)
 
         sts_test_data = SentencePairTestDataset(sts_test_data, args)
