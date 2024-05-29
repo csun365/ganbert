@@ -4,3 +4,6 @@
 /__pycache__
 /*.pt
 /predictions
+/data labeled.tsv
+/data test.tsv
+/data unlabeled.tsv

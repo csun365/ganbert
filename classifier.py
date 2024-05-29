@@ -232,6 +232,18 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
+def temp(args):
+    train_data, num_labels = load_data(args.train, 'train')
+    train_dataset = SentimentDataset(train_data, args)
+    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size,
+                                  collate_fn=train_dataset.collate_fn)
+    for batch in train_dataloader:
+        b_ids, b_mask, b_labels = (batch['token_ids'], batch['attention_mask'], batch['labels'])
+        print(b_ids.shape, b_mask.shape, b_labels.shape)
+        print(b_ids)
+        print(b_mask)
+        print(b_labels)
+        break
 
 def train(args):
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
@@ -354,8 +366,6 @@ def get_args():
 if __name__ == "__main__":
     args = get_args()
     seed_everything(args.seed)
-
-    print('Training Sentiment Classifier on SST...')
     config = SimpleNamespace(
         filepath='sst-classifier.pt',
         lr=args.lr,
@@ -370,7 +380,11 @@ if __name__ == "__main__":
         dev_out = 'predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
         test_out = 'predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
     )
-
+    temp(config)
+    from sys import exit
+    exit(0)
+    print('Training Sentiment Classifier on SST...')
+    
     train(config)
 
     print('Evaluating on SST...')

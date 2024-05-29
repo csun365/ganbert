@@ -10,215 +10,261 @@ from utils import *
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import f1_score, accuracy_score
 from tokenizer import BertTokenizer
+from tqdm import tqdm
+import time
+import math
+import datetime
 # from optimizer import AdamW
 
 class Discriminator(nn.Module):
-    def __init__(self, d_hidden_size, dkp, num_labels, num_hidden=1):
+    def __init__(self, class_dim, input_dim=768, hidden_dim=256, num_hidden=1):
         super(Discriminator, self).__init__()
-        self.dkp = dkp
-        self.hidden_layers = nn.ModuleList([nn.Linear(d_hidden_size, d_hidden_size) for i in range(num_hidden)])        
-        self.output_layer = nn.Linear(d_hidden_size, num_labels + 1)
+        self.dropout_rate = 0.2
+        self.input_layer = nn.Linear(input_dim, hidden_dim)
+        self.hidden_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for i in range(num_hidden)])        
+        self.output_layer = nn.Linear(hidden_dim, class_dim + 1)
     
     def forward(self, x):
-        layer_hidden = F.dropout(x, p=self.dkp, training=self.training)
+        layer_hidden = F.dropout(x, p=self.dropout_rate, training=self.training)
+        layer_hidden = F.leaky_relu(self.input_layer(layer_hidden))
+        layer_hidden = F.dropout(layer_hidden, p=self.dropout_rate, training=self.training)
         for dense in self.hidden_layers:
             layer_hidden = dense(layer_hidden)
             layer_hidden = F.leaky_relu(layer_hidden)
-            layer_hidden = F.dropout(layer_hidden, p=self.dkp, training=self.training)
+            layer_hidden = F.dropout(layer_hidden, p=self.dropout_rate, training=self.training)
         flatten = layer_hidden
         logit = self.output_layer(layer_hidden)
         prob = F.softmax(logit, dim=1)
-        
         return flatten, logit, prob
 
-# Example usage
-# d_hidden_size = 128
-# dkp = 0.5
-# num_labels = 10
-# num_hidden = 1
-# discriminator = Discriminator(d_hidden_size, dkp, num_labels, num_hidden)
-# x = torch.randn(32, d_hidden_size)  # Example input
-# flatten5, logit, prob = discriminator(x)
-
 class ConditionalGenerator(nn.Module):
-    def __init__(self, z_dim, class_dim, g_hidden_size, dkp, num_hidden=1):
+    def __init__(self, z_dim, class_dim, output_dim=768, hidden_dim=256, num_hidden=1):
         super(ConditionalGenerator, self).__init__()
-        self.dkp = dkp
-
-        # Conditional GAN: Define the input layer to combine z and class_dim
-        self.input_layer = nn.Linear(z_dim + class_dim, g_hidden_size)
-
-        self.hidden_layers = nn.ModuleList([nn.Linear(g_hidden_size, g_hidden_size) for i in range(num_hidden)])
-        self.output_layer = nn.Linear(g_hidden_size, g_hidden_size)
+        self.dropout_rate = 0.2
+        # Conditional GAN: Define the input layer to concatenate z and class_dim
+        self.input_layer = nn.Linear(z_dim + class_dim, hidden_dim)
+        self.hidden_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for i in range(num_hidden)])
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, z, class_labels):
         # Conditional GAN: Concatenate z and class_labels
         x = torch.cat((z, class_labels), dim=1)
         layer_hidden = self.input_layer(x)
         layer_hidden = F.leaky_relu(layer_hidden)
-        layer_hidden = F.dropout(layer_hidden, p=self.dkp, training=self.training)
+        layer_hidden = F.dropout(layer_hidden, p=self.dropout_rate, training=self.training)
         for dense in self.hidden_layers:
             layer_hidden = dense(layer_hidden)
             layer_hidden = F.leaky_relu(layer_hidden)
-            layer_hidden = F.dropout(layer_hidden, p=self.dkp, training=self.training)
+            layer_hidden = F.dropout(layer_hidden, p=self.dropout_rate, training=self.training)
         layer_hidden = self.output_layer(layer_hidden)
-
         return layer_hidden
 
-# Example usage
-# z_dim = 100  # Dimension of the latent vector
-# class_dim = 10  # Dimension of the class vector
-# g_hidden_size = 128
-# dkp = 0.5
-# num_hidden = 1
-# generator = ConditionalGenerator(z_dim, class_dim, g_hidden_size, dkp, num_hidden)
-# z = torch.randn(32, z_dim)  # Example latent vector input
-# class_labels = torch.randn(32, class_dim)  # Example class labels input
-# generated_data = generator(z, class_labels)
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=11711)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--fine-tune-mode", type=str,
+                        help='last-linear-layer: the BERT parameters are frozen and the task specific head parameters are updated; full-model: BERT parameters are updated as well',
+                        choices=('last-linear-layer', 'full-model'), default="last-linear-layer")
+    parser.add_argument("--use_gpu", action='store_true')
 
-class DiscriminatorBert(torch.nn.Module):
-    def __init__(self, d_hidden_size, dkp, num_labels, num_hidden=1):
-        super(DiscriminatorBert, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.discriminator = Discriminator(d_hidden_size, dkp, num_labels, num_hidden)
+    parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
+    parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
+    parser.add_argument("--lr", type=float, help="learning rate, default lr for 'pretrain': 1e-3, 'finetune': 1e-5",
+                        default=1e-3)
 
-    def forward(self, input_ids, attention_mask):
-        embedding = self.bert(input_ids, attention_mask)
-        h_cls = embedding["pooler_output"]
-        flatten, logit, prob = self.discriminator(h_cls)
-        return flatten, logit, prob
-    
-def train():
-    # From starter code
-    # ---------------------------------------------------------------------------------------
-    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-    # Create the data and its corresponding datasets and dataloader.
+    args = parser.parse_args()
+    return args
+
+def seed_everything(seed=11711):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+def format_time(elapsed):
+    '''
+    Takes a time in seconds and returns a string hh:mm:ss
+    '''
+    # Round to the nearest second.
+    elapsed_rounded = int(round((elapsed)))
+    # Format as hh:mm:ss
+    return str(datetime.timedelta(seconds=elapsed_rounded))
+
+def train(args):
+    # device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+    device = torch.device("mps")
     train_data, num_labels = load_data(args.train, 'train')
     dev_data = load_data(args.dev, 'valid')
-
-    train_dataset = SentimentDataset(train_data, args)
+    train_dataset = SentimentDataset(train_data[:1000], args)
     dev_dataset = SentimentDataset(dev_data, args)
-
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size,
                                   collate_fn=train_dataset.collate_fn)
     dev_dataloader = DataLoader(dev_dataset, shuffle=False, batch_size=args.batch_size,
                                 collate_fn=dev_dataset.collate_fn)
-    # ---------------------------------------------------------------------------------------
-    netG = ConditionalGenerator(768, num_labels, 128, 0.3, 1).to(device)
-    netD = DiscriminatorBert(768, 0.3, num_labels, 1).to(device)
-    criterion_BCE = nn.BCELoss()
-    criterion_CE = nn.CrossEntropyLoss()
-
-    # Setup Adam optimizers for both G and D
-    optimizerD = optim.Adam(netD.parameters(), lr=0.0002, betas=(0.5, 0.999))
-    optimizerG = optim.Adam(netG.parameters(), lr=0.0002, betas=(0.5, 0.999))
-
-    # Lists to keep track of progress
-    G_losses = []
-    D_losses = []
-    iters = 0
     
-    num_epochs = args.num_epochs
-    real_label = 1
-    fake_label = 0
-    nz = 768
+    noise_size = 100
+    epsilon = 1e-8 # for loss estimation
+    # Models
+    transformer = BertModel.from_pretrained('bert-base-uncased').to(device)
+    generator = ConditionalGenerator(z_dim=noise_size, class_dim=num_labels).to(device)
+    discriminator = Discriminator(class_dim=num_labels).to(device)
 
-    for epoch in range(num_epochs):
-        for i, data in enumerate(train_dataloader, 0):
+    # Inspired from Colab in original ganbert repo
+    training_stats = []
+    total_t0 = time.time()
+    transformer_vars = [i for i in transformer.parameters()]
+    d_vars = transformer_vars + [v for v in discriminator.parameters()]
+    g_vars = [v for v in generator.parameters()]
+    d_optimizer = optim.AdamW(d_vars, lr=5e-5)
+    g_optimizer = optim.AdamW(g_vars, lr=5e-5)
+    
+    for epoch in range(10):
+        print("")
+        print('======== Epoch {:} / {:} ========'.format(epoch + 1, 10))
+        print('Training...')
+        t0 = time.time()
+        tr_g_loss = 0
+        tr_d_loss = 0
+        transformer.train()
+        generator.train()
+        discriminator.train()
+        for step, batch in tqdm(enumerate(train_dataloader)):
+            if step % 10 == 0 and not step == 0:
+                elapsed = format_time(time.time() - t0)
+                print('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(train_dataloader), elapsed))
+            # unpack data
+            b_ids, b_mask, b_labels = (batch['token_ids'], batch['attention_mask'], batch['labels'])
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
+            b_labels = b_labels.to(device)
+            one_hot = torch.nn.functional.one_hot(b_labels, num_labels)
+            real_batch_size = b_ids.shape[0]
+            model_outputs = transformer(b_ids, attention_mask=b_mask)
+            hidden_states = model_outputs["pooler_output"]
+            noise = torch.zeros(real_batch_size, noise_size, device=device).uniform_(0, 1)
+            gen_rep = generator(noise, one_hot)
+            discriminator_input = torch.cat([hidden_states, gen_rep], dim=0)
+            features, logits, probs = discriminator(discriminator_input)
 
-            ############################
-            # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-            ###########################
-            ## Train with all-real batch
-            netD.zero_grad()
-            # Format batch
-            real_cpu = data[0].to(device)
-            real_labels = data[1].to(device)  # Assuming class labels are provided with the data
-            b_size = real_cpu.size(0)
-            label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
-            
-            # Concatenate real images and real labels
-            # real_labels_one_hot = torch.nn.functional.one_hot(real_labels, num_classes).float().to(device)
-            # real_combined = torch.cat((real_cpu, real_labels_one_hot), dim=1)
-            _, logit_real, prob_real = netD(real_cpu, data[2].to(device))  # assuming data[2] is attention_mask
-            
-            # Adversarial loss for real data
-            errD_real = criterion_BCE(prob_real[:, -1], label)
-            
-            # Classification loss for real data
-            errD_class = criterion_CE(logit_real[:, :-1], real_labels)
-            
-            D_x = prob_real[:, -1].mean().item()
-            
-            # # Forward pass real batch through D
-            # output = netD(real_combined).view(-1)
-            # # Calculate loss on all-real batch
-            # errD_real = criterion(output, label)
-            # # Calculate gradients for D in backward pass
-            # errD_real.backward()
-            # D_x = output.mean().item()
+            features_list = torch.split(features, real_batch_size)
+            D_real_features = features_list[0]
+            D_fake_features = features_list[1]
 
-            ## Train with all-fake batch
-            # Generate batch of latent vectors
-            noise = torch.randn(b_size, nz, device=device)
-            # Generate batch of class labels
-            fake_labels = torch.randint(0, num_labels, (b_size,), device=device)
-            # # Generate fake image batch with G
-            fake = netG(noise, F.one_hot(fake_labels, num_classes=num_labels).float().to(device))
+            logits_list = torch.split(logits, real_batch_size)
+            D_real_logits = logits_list[0]
+            D_fake_logits = logits_list[1]
 
-            label.fill_(fake_label) # Fake labels are 0 for real/fake classification
-            
-            # Forward pass of fake batch through D
-            # Classify all fake batch with D
-            _, logit_fake, prob_fake = netD(fake, data[2].to(device))  # assuming same attention_mask for simplicity
-            
-            errD_fake = criterion_BCE(prob_fake[:, -1], label)
-            D_G_z1 = prob_fake[:, -1].mean().item()
+            probs_list = torch.split(probs, real_batch_size)
+            D_real_probs = probs_list[0]
+            D_fake_probs = probs_list[1]
 
-            
-            # Calculate D's loss on the all-fake batch
-            errD_fake = criterion_BCE(prob_fake[:, -1], label)
-            # Calculate the gradients for this batch, accumulated (summed) with previous gradients
-            
-            # Total discriminator loss
-            errD = errD_real + errD_fake + errD_class
-            errD.backward()
-            optimizerD.step()
+            # Generator's LOSS estimation
+            g_loss_d = -1 * torch.mean(torch.log(1 - D_fake_probs[:,-1] + epsilon))
+            g_feat_reg = torch.mean(torch.pow(torch.mean(D_real_features, dim=0) - torch.mean(D_fake_features, dim=0), 2))
+            g_loss = g_loss_d + g_feat_reg
 
-            ############################
-            # (2) Update G network: maximize log(D(G(z)))
-            ###########################
-            netG.zero_grad()
-            label.fill_(real_label)  # fake labels are real for generator cost
-            
-            # Since we just updated D, perform another forward pass of all-fake batch through D
-            _, logit_fake, prob_fake = netD(fake, data[2].to(device))
-            
-            # Adversarial loss for generator
-            errG_adv = criterion_BCE(prob_fake[:, -1], label)
-            # Classification loss for generated data
-            errG_class = criterion_CE(logit_fake[:, :-1], fake_labels)
-            
-            # Total Generator Loss
-            errG = errG_adv + errG_class
-            errG.backward()
-            optimizerG.step()
-            
-            # Compute D(G(z)) which gives us generator update
-            D_G_z2 = prob_fake[:, -1].mean().item()
+            # Disciminator's LOSS estimation
+            logits = D_real_logits[:,0:-1]
+            log_probs = F.log_softmax(logits, dim=-1)
+            # The discriminator provides an output for labeled and unlabeled real data
+            # so the loss evaluated for unlabeled data is ignored (masked)
+            per_example_loss = -torch.sum(one_hot * log_probs, dim=-1)
+            # per_example_loss = torch.masked_select(per_example_loss, b_label_mask.to(device))
+            labeled_example_count = per_example_loss.type(torch.float32).numel()
 
+            # It may be the case that a batch does not contain labeled examples,
+            # so the "supervised loss" in this case is not evaluated
+            if labeled_example_count == 0:
+                D_L_Supervised = 0
+            else:
+                D_L_Supervised = torch.div(torch.sum(per_example_loss.to(device)), labeled_example_count)
 
-            # Output training stats
-            if i % 50 == 0:
-                print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
-                    % (epoch, num_epochs, i, len(train_dataloader),
-                        errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+            D_L_unsupervised1U = -1 * torch.mean(torch.log(1 - D_real_probs[:, -1] + epsilon))
+            D_L_unsupervised2U = -1 * torch.mean(torch.log(D_fake_probs[:, -1] + epsilon))
+            d_loss = D_L_Supervised + D_L_unsupervised1U + D_L_unsupervised2U
+            
+            g_optimizer.zero_grad()
+            d_optimizer.zero_grad()
+            g_loss.backward(retain_graph=True)
+            d_loss.backward()
+            g_optimizer.step()
+            d_optimizer.step()
+            tr_g_loss += g_loss.item()
+            tr_d_loss += d_loss.item()
 
-            # Save Losses for plotting later
-            G_losses.append(errG.item())
-            D_losses.append(errD.item())
-            iters += 1
+        avg_train_loss_g = tr_g_loss / len(train_dataloader)
+        avg_train_loss_d = tr_d_loss / len(train_dataloader)
+        training_time = format_time(time.time() - t0)
+        print("")
+        print("  Average training loss generator: {0:.3f}".format(avg_train_loss_g))
+        print("  Average training loss discriminator: {0:.3f}".format(avg_train_loss_d))
+        print("  Training epoch took: {:}".format(training_time))
 
-if __name__ == "main":
-    print("Starting Training Loop...")
-    # train()
+        print("")
+        print("Running Test on Dev...")
+        t0 = time.time()
+        transformer.eval()
+        discriminator.eval()
+        generator.eval()
+        total_test_accuracy = 0
+        total_test_loss = 0
+        nb_test_steps = 0
+        all_preds = []
+        all_labels_ids = []
+        nll_loss = nn.CrossEntropyLoss(ignore_index=-1)
+        for batch in dev_dataloader:
+            b_ids, b_mask, b_labels = (batch['token_ids'], batch['attention_mask'], batch['labels'])
+            b_ids = b_ids.to(device)
+            b_mask = b_mask.to(device)
+            b_labels = b_labels.to(device)
+            with torch.no_grad():
+                model_outputs = transformer(b_ids, attention_mask=b_mask)
+                hidden_states = model_outputs["pooler_output"]
+                _, logits, probs = discriminator(hidden_states)
+                filtered_logits = logits[:,0:-1]
+                total_test_loss += nll_loss(filtered_logits, b_labels)
+            _, preds = torch.max(filtered_logits, 1)
+            all_preds += preds.detach().cpu()
+            all_labels_ids += b_labels.detach().cpu()
+
+        all_preds = torch.stack(all_preds).numpy()
+        print(np.stack((all_preds, all_labels_ids), axis=-1))
+        all_labels_ids = torch.stack(all_labels_ids).numpy()
+        test_accuracy = np.sum(all_preds == all_labels_ids) / len(all_preds)
+        avg_test_loss = total_test_loss / len(dev_dataloader)
+        avg_test_loss = avg_test_loss.item()
+        test_time = format_time(time.time() - t0)
+        print("  Accuracy: {0:.3f}".format(test_accuracy))
+        print("  Test Loss: {0:.3f}".format(avg_test_loss))
+        print("  Test took: {:}".format(test_time))
+        training_stats.append({'epoch': epoch + 1,
+                               'Training Loss generator': avg_train_loss_g,
+                               'Training Loss discriminator': avg_train_loss_d,
+                               'Valid. Loss': avg_test_loss,
+                               'Valid. Accur.': test_accuracy,
+                               'Training Time': training_time,
+                               'Test Time': test_time})
+
+if __name__ == "__main__":
+    args = get_args()
+    seed_everything(args.seed)
+    config = SimpleNamespace(
+        filepath='sst-classifier.pt',
+        lr=args.lr,
+        use_gpu=args.use_gpu,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        hidden_dropout_prob=args.hidden_dropout_prob,
+        train='data/ids-sst-train.csv',
+        dev='data/ids-sst-dev.csv',
+        test='data/ids-sst-test-student.csv',
+        fine_tune_mode=args.fine_tune_mode,
+        dev_out = 'predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
+        test_out = 'predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
+    )
+    print("GANBERT!")
+    train(config)
