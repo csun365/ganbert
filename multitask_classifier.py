@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader
 from bert import BertModel
 from optimizer import AdamW
 from tqdm import tqdm
+from PCGRAD.pcgrad import PCGrad
 
 from datasets import (
     SentenceClassificationDataset,
@@ -77,13 +78,18 @@ class MultitaskBERT(nn.Module):
         self.dense_2 = nn.Linear(256, 128)
         self.dropout_1 = nn.Dropout(config.hidden_dropout_prob)
         self.dropout_2 = nn.Dropout(config.hidden_dropout_prob)
-        # self.dense_sst = nn.Linear(BERT_HIDDEN_SIZE, 128)
-        # self.dense_para = nn.Linear(BERT_HIDDEN_SIZE, 128)
-        # self.dense_sts = nn.Linear(BERT_HIDDEN_SIZE, 128)
-        self.output_sst = nn.Linear(128, N_SENTIMENT_CLASSES)
-        self.para_1 = nn.Linear(2 * 128, 64)
+        self.conv1d_layer = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding='same')
+        self.SST_conv = nn.Conv1d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding='same')
+        
+        self.dense_sst = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        self.dense_para = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        self.dense_sts = nn.Linear(BERT_HIDDEN_SIZE, 128)
+        
+        self.output_sst = nn.Linear(2*128, N_SENTIMENT_CLASSES)
+        
+        self.para_1 = nn.Linear(4 * 128, 64)
         self.para_2 = nn.Linear(64, 1)
-        self.sts_1 = nn.Linear(2 * 128, 64)
+        self.sts_1 = nn.Linear(4 * 128, 64)
         self.sts_2 = nn.Linear(64, 1)
         
 
@@ -96,8 +102,12 @@ class MultitaskBERT(nn.Module):
         ### TODO
         embedding = self.bert(input_ids, attention_mask)
         h_cls = embedding["pooler_output"]
-        output = self.dropout_1(F.relu(self.dense_1(h_cls)))
-        return self.dropout_2(F.relu(self.dense_2(output)))
+        output = self.dropout_1(self.dense_2((self.dense_1(h_cls)))) #128
+        
+        conv = self.conv1d_layer(output.unsqueeze(2)) #128
+        conv = conv.squeeze()
+        #print(output.shape, conv.shape)
+        return h_cls, conv # (8 x 128)
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -111,8 +121,19 @@ class MultitaskBERT(nn.Module):
         # sst_embed = self.dense_sst(h_cls)
         # output = self.output_sst(torch.cat((shared_embed, sst_embed), dim=-1))
         # return F.relu(output)
-        embed = self.forward(input_ids, attention_mask)
-        return self.output_sst(embed)
+        h_cls, conv = self.forward(input_ids, attention_mask)
+        #print(h_cls.shape, conv.shape)
+        
+        sst_embed = self.dense_sst(h_cls) #128
+        concat = torch.cat((conv, sst_embed), dim=-1)
+        #print(concat.shape)
+        concat = concat.unsqueeze(2)
+        #print(concat.shape)
+        
+        self.SST_conv(concat)
+        concat = concat.squeeze()
+        
+        return self.output_sst(concat)
 
 
     def predict_paraphrase(self,
@@ -129,6 +150,19 @@ class MultitaskBERT(nn.Module):
         # para_embed_2 = self.dense_para(h_cls_2)
         # output = self.output_para(torch.cat((shared_embed_1, para_embed_1, shared_embed_2, para_embed_2), dim=-1))
         # return output.squeeze(-1)
+        
+        
+        h_cls_1, conv_1 = self.forward(input_ids_1, attention_mask_1)
+        h_cls_2, conv_2 = self.forward(input_ids_2, attention_mask_2)
+        
+        para_embed_1 = self.dense_para(h_cls_1)
+        para_embed_2 = self.dense_para(h_cls_2)
+        
+        output = self.para_1(torch.cat((para_embed_1, para_embed_2, conv_1, conv_2), dim=-1))
+        output = self.para_2(F.relu(output))
+        
+        return output.squeeze(-1)
+                
         embed_1 = self.forward(input_ids_1, attention_mask_1)
         embed_2 = self.forward(input_ids_2, attention_mask_2)
         output = self.para_1(torch.cat((embed_1, embed_2), dim=-1))
@@ -147,6 +181,17 @@ class MultitaskBERT(nn.Module):
         # sts_embed_2 = self.dense_para(h_cls_2)
         # output = self.output_para(torch.cat((shared_embed_1, sts_embed_1, shared_embed_2, sts_embed_2), dim=-1))
         # return output.squeeze(-1)
+        
+        h_cls_1, conv_1 = self.forward(input_ids_1, attention_mask_1)
+        h_cls_2, conv_2 = self.forward(input_ids_2, attention_mask_2)
+        
+        sts_embed_1 = self.dense_sts(h_cls_1)
+        sts_embed_2 = self.dense_sts(h_cls_2)
+        
+        output = torch.cat((sts_embed_1, sts_embed_2, conv_1, conv_2), dim = -1) #4 * 128 = 596
+        output = self.sts_2(F.relu(self.sts_1(output))).squeeze(-1)
+        return output
+        
         embed_1 = self.forward(input_ids_1, attention_mask_1)
         embed_2 = self.forward(input_ids_2, attention_mask_2)
         output = self.sts_1(torch.cat((embed_1, embed_2), dim=-1))
@@ -156,7 +201,7 @@ class MultitaskBERT(nn.Module):
 def save_model(model, optimizer, args, config, filepath):
     save_info = {
         'model': model.state_dict(),
-        'optim': optimizer.state_dict(),
+        'optim': optimizer.optimizer.state_dict(),
         'args': args,
         'model_config': config,
         'system_rng': random.getstate(),
@@ -220,7 +265,7 @@ def train_multitask(args):
     model = model.to(device)
 
     lr = args.lr
-    optimizer = AdamW(model.parameters(), lr=lr)
+    optimizer = PCGrad(AdamW(model.parameters(), lr=lr))
     best_dev_acc = 0
 
     # Run for the specified number of epochs.
@@ -259,12 +304,13 @@ def train_multitask(args):
             sts_logits =  model.predict_similarity(sts_b_id1, sts_b_mask1, sts_b_id2, sts_b_mask2)
             
             sst_loss = F.cross_entropy(sst_logits, sst_b_labels.view(-1), reduction='sum') / args.batch_size
-            para_loss = F.binary_cross_entropy(para_logits, para_b_labels.float(), reduction='sum') / args.batch_size
+            para_loss = F.cross_entropy(para_logits, para_b_labels.float(), reduction='sum') / args.batch_size
             sts_loss = F.mse_loss(sts_logits, sts_b_labels.float(), reduction='sum') / args.batch_size
             
             loss = sst_loss + para_loss + sts_loss
+            losses = [sst_loss, para_loss, sts_loss]
 
-            loss.backward()
+            optimizer.pc_backward(losses)
             optimizer.step()
 
             train_loss += loss.item()
